@@ -76,6 +76,7 @@ class MPPIConfig(object):
     noise_abs_cost: bool = False
     filter_u: bool = False
     use_priors: bool = False
+    dt: float = 0.1
 
 class MPPIPlanner(ABC):
     """
@@ -218,7 +219,7 @@ class MPPIPlanner(ABC):
         self.beta_um = 1.2
 
     def _dynamics(self, state, u, t=None):
-        return self.dynamics(state, u, t=None)
+        return self.dynamics(state, u, t=self.cfg.dt)
 
     def _running_cost(self, state):
         return self.running_cost(state)

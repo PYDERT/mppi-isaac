@@ -1,0 +1,11 @@
+defaults:
+  - mppi: no_isaac
+  # - isaacgym: push
+
+goal: [10.0, 10.0, 0.0]
+render: false
+n_steps: 5
+nx: 6
+
+actors: ['heijn']
+initial_actor_positions: [[0.0, 0.0, 0.0]]
