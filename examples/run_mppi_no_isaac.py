@@ -4,55 +4,59 @@ from omegaconf import OmegaConf
 import torch
 import zerorpc
 import pytorch3d.transforms
+import numpy as np
 
-from mppiisaac.utils.config_store import ExampleConfig
+from mppiisaac.utils.config_store_no_isaac import ExampleConfig
+from mppiisaac.planner.obstacle_class import Obstacle
 
 import matplotlib.pyplot as plt
 
+from typing import List
+
 class Objective(object):
-    def __init__(self, cfg):
+    def __init__(self, cfg, obstacles: List[Obstacle]):
         
-        # Old Code
-        self.isaac = False
-        if self.isaac:
-            # Tuning of the weights for box
-            self.w_robot_to_block_pos=  .2
-            self.w_block_to_goal_pos=   2.
-            self.w_block_to_goal_ort=   3.0
-            self.w_push_align=          0.6
-            self.w_collision=           10
-            self.w_vel=                 0.
-
-            # Task configration for comparison with baselines
-            self.ee_index = 4
-            self.block_index = 1
-            self.ort_goal_euler = torch.tensor([0, 0, 0], device=cfg.mppi.device)
-
-            self.block_goal_box = torch.tensor([0., 0., 0.5, 0.0, 0.0, 0.0, 1.0], device=cfg.mppi.device)
-            self.block_goal_sphere = torch.tensor([0.42, 1., 0.5, 0, 0, -0.7071068, 0.7071068], device=cfg.mppi.device) # Rotation 90 deg
-
-            # Select goal according to test
-            self.block_goal_pose = torch.clone(self.block_goal_box)
-            self.block_ort_goal = torch.clone(self.block_goal_pose[3:7])
-            self.goal_yaw = torch.atan2(2.0 * (self.block_ort_goal[-1] * self.block_ort_goal[2] + self.block_ort_goal[0] * self.block_ort_goal[1]), self.block_ort_goal[-1] * self.block_ort_goal[-1] + self.block_ort_goal[0] * self.block_ort_goal[0] - self.block_ort_goal[1] * self.block_ort_goal[1] - self.block_ort_goal[2] * self.block_ort_goal[2])
-
-            # Number of obstacles
-            self.obst_number = 3        # By convention, obstacles are the last actors
-
-        # New code
+        self.cfg = cfg
         self.goal_euler = torch.tensor(cfg.goal[:2], device=cfg.mppi.device)
         self.goal_orientation = torch.tensor([cfg.goal[2]], device=cfg.mppi.device)
+        
+        self.obstacles = obstacles
 
         self.success = False
         self.count = 0
 
-    
-    def compute_cost(self, states):
-        # Distances robot
-        robot_to_goal = torch.linalg.norm(self.goal_euler - states[:, :2], dim=1, keepdim=True).squeeze(1)
-        dyaw = 0.1*(states[:, 2] - self.goal_orientation)
+        self.control = torch.zeros((len(cfg.mppi.noise_sigma)), device=cfg.mppi.device)
+        self.current_state = torch.zeros((cfg.nx), device=cfg.mppi.device)
+
+    def compute_cost(self, states, control):
         
-        total_cost = robot_to_goal # + dyaw
+        # Normlisation value
+        # norm = torch.linalg.norm(self.goal_euler - self.current_state[:2]) * 
+        
+        # Distances robot
+        total_cost = torch.linalg.norm(self.goal_euler - states[:, :2], dim=1, keepdim=True).squeeze(1)
+        # total_cost_large = total_cost[total_cost > 1]**2
+        # total_cost_small = total_cost[total_cost <= 1]**0.5
+        # total_cost = torch.zeros_like(total_cost) + total_cost[total_cost > 1]**2 + total_cost[total_cost <= 1]**0.5
+        # print(total_cost.mean())
+        
+        for obstacle in self.obstacles:
+
+            integral = obstacle.integrate_one_shot_monte_carlo_circles(states[:, 0], states[:, 1])
+
+            # Add integral cost to total cost
+            total_cost += integral*10
+
+        vx = torch.abs(states[:, 3])
+        vy = torch.abs(states[:, 4])
+        # total_cost += vx + vy
+
+        # Check for every entry in the control vector if it is outside the limits
+        to_large_a = torch.abs(control[:, 0]) > 2
+        to_large_s = torch.abs(control[:, 1]) > 2
+
+        # total_cost += to_large_a*1 + to_large_s*1
+        # total_cost += control[:, 0]**2 + control[:, 1]**2
 
         return total_cost
     
@@ -62,23 +66,51 @@ def run_mppi(cfg: ExampleConfig):
     # Note: Workaround to trigger the dataclasses __post_init__ method
     cfg = OmegaConf.to_object(cfg)
 
-    objective = Objective(cfg)
-    prior = None
-    planner = MPPIisaacPlanner(cfg, objective, prior)
-
-    steps = 300
+    steps = 400
     trajectory = torch.zeros((steps, 2))
+
+    total_costs = torch.zeros((steps))
+
+    obstacles = [Obstacle(cfg, 5, 5)]
+    obstacles = []
+    objective = Objective(cfg, obstacles)
+    prior = None
+    planner = MPPIisaacPlanner(cfg, objective, steps, prior)
 
     for i in range(steps):
 
+        print(i)
         control = planner.mppi.command(planner.current_state)
+        objective.control = control
         planner.current_state = planner.forward_propagate(planner.current_state, control, cfg.mppi.dt)
+        objective.current_state = planner.current_state
+        total_costs[i] = planner.mppi.total_costs.mean()
 
         trajectory[i] = planner.current_state[:2]
 
+    # Plot trajectory and obstacles
     plt.plot(trajectory[:, 0], trajectory[:, 1])
+    for obstacle in obstacles:
+        position = obstacle.current_state.cpu().numpy()
+        plt.plot(position[0], position[1], 'ro')
+    plt.show()
+
+    # Plot velocities over time
+    plt.plot(total_costs.cpu().numpy())
+    plt.plot(planner.x_dots.cpu().numpy())
+    plt.plot(planner.y_dots.cpu().numpy())
+    plt.plot(planner.theta_dots.cpu().numpy())
+    plt.legend(['total_costs', 'x_dots', 'y_dots', 'theta_dots'])
     plt.show()
 
 
+import cProfile
+import pstats
+
 if __name__ == "__main__":
-    run_mppi()
+    with cProfile.Profile() as pr:
+        run_mppi()
+    
+    stats = pstats.Stats(pr)
+    stats.sort_stats(pstats.SortKey.TIME).print_stats(20)
+        

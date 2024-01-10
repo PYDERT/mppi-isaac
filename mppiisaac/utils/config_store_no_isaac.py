@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 from mppiisaac.planner.mppi import MPPIConfig
-from mppiisaac.planner.isaacgym_wrapper import IsaacGymConfig, ActorWrapper
 from hydra.core.config_store import ConfigStore
 
 from typing import List, Optional
@@ -11,7 +10,6 @@ class ExampleConfig:
     render: bool
     n_steps: int
     mppi: MPPIConfig
-    isaacgym: IsaacGymConfig
     goal: List[float]
     nx: int
     actors: List[str]
@@ -33,4 +31,3 @@ cs.store(name="config_boxer_push", node=ExampleConfig)
 cs.store(name="config_panda_c_space_goal", node=ExampleConfig)
 cs.store(name="config_no_isaac", node=ExampleConfig)
 cs.store(group="mppi", name="base_mppi", node=MPPIConfig)
-cs.store(group="isaacgym", name="base_isaacgym", node=IsaacGymConfig)

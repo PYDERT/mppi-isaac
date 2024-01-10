@@ -221,8 +221,8 @@ class MPPIPlanner(ABC):
     def _dynamics(self, state, u, t=None):
         return self.dynamics(state, u, t=self.cfg.dt)
 
-    def _running_cost(self, state):
-        return self.running_cost(state)
+    def _running_cost(self, state, control):
+        return self.running_cost(state, control)
 
     def _exp_util(self, costs, actions):
         """
@@ -374,7 +374,7 @@ class MPPIPlanner(ABC):
                 self.perturbed_action[self.K - 2][t] = u[self.K - 2]
                 
             state, u = self._dynamics(state, u, t)
-            c = self._running_cost(state)
+            c = self._running_cost(state, u)
 
             # Update action if there were changes in fusion mppi due for instance to suction constraints
             self.perturbed_action[:,t] = u

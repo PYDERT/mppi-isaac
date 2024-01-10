@@ -1,7 +1,13 @@
 import torch
 import matplotlib.pyplot as plt
 
-def update_car_states(states, controls, dt=0.1):
+
+
+
+
+
+def dynamics(states, controls, t=0.1):
+        
     # Car parameters
     L = 2.0  # Length of the car (wheelbase)
 
@@ -10,19 +16,51 @@ def update_car_states(states, controls, dt=0.1):
     acceleration, steering_angle = controls[:, 0], controls[:, 1]
 
     # Update rates of change using the dynamic model
-    yaw_dot += (x_dot / L) * torch.tan(steering_angle) * dt
-    x_dot += acceleration * torch.cos(yaw) * dt
-    y_dot += acceleration * torch.sin(yaw) * dt
+    yaw_dot += (x_dot / L) * torch.tan(steering_angle) * t
+    x_dot += acceleration * torch.cos(yaw) * t
+    y_dot += acceleration * torch.sin(yaw) * t
 
     # Update the state (position and orientation) based on the rates of change
-    x += x_dot * dt
-    y += y_dot * dt
-    yaw += yaw_dot * dt
+    x += x_dot * t
+    y += y_dot * t
+    yaw += yaw_dot * t
 
     # Stack the updated state variables
     updated_states = torch.stack([x, y, yaw, x_dot, y_dot, yaw_dot], dim=1)
 
-    return updated_states
+    return (updated_states, controls)
+
+
+def forward_propagate(state, control, t):
+
+    # Car parameters
+    L = 2.0  # Length of the car (wheelbase)
+
+    # Unpack state variables and control inputs
+    try:
+        x, y, yaw, x_dot, y_dot, yaw_dot = state[0]
+    except TypeError:
+        x, y, yaw, x_dot, y_dot, yaw_dot = state
+
+    acceleration, steering_angle = control
+
+    # Update rates of change using the dynamic model
+    yaw_dot += (x_dot / L) * torch.tan(steering_angle) * t
+    x_dot += acceleration * torch.cos(yaw) * t
+    y_dot += acceleration * torch.sin(yaw) * t
+
+    # Update the state (position and orientation) based on the rates of change
+    x += x_dot * t
+    y += y_dot * t
+    yaw += yaw_dot * t
+
+    # Create the updated state tensor
+    updated_state = torch.tensor([x, y, yaw, x_dot, y_dot, yaw_dot], device="cuda:0")
+
+    return updated_state
+
+
+
 
 def create_control_inputs(horizon, samples, control_inputs):
 
@@ -31,7 +69,9 @@ def create_control_inputs(horizon, samples, control_inputs):
     
     control_inputs_tensor = torch.stack([input_velocity_tensor, input_steering_tensor], dim=2)
     return control_inputs_tensor
-    
+
+
+
 if __name__ == '__main__':
 
     horizon = 10

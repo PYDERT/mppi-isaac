@@ -31,7 +31,7 @@ class MPPIisaacPlanner(object):
         dynamics, running_cost, and terminal_cost
     """
 
-    def __init__(self, cfg, objective: Callable, prior: Optional[Callable] = None):
+    def __init__(self, cfg, objective: Callable, steps, prior: Optional[Callable] = None):
 
         self.cfg = cfg
         self.objective = objective
@@ -40,6 +40,10 @@ class MPPIisaacPlanner(object):
             self.prior = lambda state, t: prior.compute_command(self.sim)
         else:
             self.prior = None
+
+        self.x_dots = torch.zeros((steps), device=cfg.mppi.device)
+        self.y_dots = torch.zeros((steps), device=cfg.mppi.device)
+        self.theta_dots = torch.zeros((steps), device=cfg.mppi.device)
 
         self.mppi = MPPIPlanner(
             cfg.mppi,
@@ -52,7 +56,7 @@ class MPPIisaacPlanner(object):
         # Note: place_holder variable to pass to mppi so it doesn't complain, while the real state is actually the isaacgym simulator itself.
         self.state_place_holder = torch.zeros((self.cfg.mppi.num_samples, self.cfg.nx))
 
-        self.current_state = torch.zeros((1, self.cfg.nx), device=self.cfg.mppi.device)
+        self.current_state = torch.zeros((self.cfg.nx), device=self.cfg.mppi.device)
     
 
     def update_objective(self, objective):
@@ -84,16 +88,13 @@ class MPPIisaacPlanner(object):
         return (updated_states, controls)
     
 
-    def forward_propagate(self, state, control, t):
+    def forward_propagate(self, state, control, t=0.1):
 
         # Car parameters
         L = 2.0  # Length of the car (wheelbase)
 
         # Unpack state variables and control inputs
-        try:
-            x, y, yaw, x_dot, y_dot, yaw_dot = state[0]
-        except TypeError:
-            x, y, yaw, x_dot, y_dot, yaw_dot = state
+        x, y, yaw, x_dot, y_dot, yaw_dot = state
 
         acceleration, steering_angle = control
 
@@ -107,15 +108,21 @@ class MPPIisaacPlanner(object):
         y += y_dot * t
         yaw += yaw_dot * t
 
+        # Find the first zero value in self.x_dots
+        zero_index = torch.nonzero(self.x_dots == 0)[0]
+        self.x_dots[zero_index] = x_dot
+        self.y_dots[zero_index] = y_dot
+        self.theta_dots[zero_index] = yaw_dot
+
         # Create the updated state tensor
         updated_state = torch.tensor([x, y, yaw, x_dot, y_dot, yaw_dot], device=self.cfg.mppi.device)
 
         return updated_state
 
 
-    def running_cost(self, state):
+    def running_cost(self, state, control):
         # Note: again normally mppi passes the state as a parameter in the running cost call, but using isaacgym the state is already saved and accesible in the simulator itself, so we ignore it and pass a handle to the simulator.
-        return self.objective.compute_cost(state)
+        return self.objective.compute_cost(state, control)
 
 
     def compute_action(self, state):
