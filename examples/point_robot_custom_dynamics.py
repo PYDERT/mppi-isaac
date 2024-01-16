@@ -13,14 +13,16 @@ import torch
 from mpscenes.goals.static_sub_goal import StaticSubGoal
 from mppiisaac.utils.config_store import ExampleConfig
 
-# MPPI to navigate a simple robot to a goal position
+import time
 
 
 class Objective(object):
-    def __init__(self, cfg, device):
+    def __init__(self, cfg):
         self.nav_goal = torch.tensor(cfg.goal, device=cfg.mppi.device)
 
-    def compute_cost(self, state: torch.Tensor):
+    # NOTE: takes in t for consistency with the custom dynamics example with obstacles
+    def compute_cost(self, state: torch.Tensor, t: int):
+        # Calculate the distance to the goal
         positions = state[:, 0:2]
         goal_dist = torch.linalg.norm(positions - self.nav_goal, axis=1)
         return goal_dist * 1.0
@@ -72,7 +74,7 @@ def set_planner(cfg):
         The goal to the motion planning problem.
     """
     # urdf = "../assets/point_robot.urdf"
-    objective = Objective(cfg, cfg.mppi.device)
+    objective = Objective(cfg)
     planner = MPPICustomDynamicsPlanner(cfg, objective)
 
     return planner
@@ -100,11 +102,13 @@ def run_point_robot(cfg: ExampleConfig):
 
     for _ in range(cfg.n_steps):
         # Calculate action with the fabric planner, slice the states to drop Z-axis [3] information.
+        t = time.time()
         ob_robot = ob["robot_0"]
         action = planner.compute_action(
             q=ob_robot["joint_state"]["position"],
             qdot=ob_robot["joint_state"]["velocity"],
         )
+        print("Action step took: ", time.time() - t)
         (
             ob,
             *_,

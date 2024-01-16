@@ -36,15 +36,13 @@ class MPPICustomDynamicsPlanner(object):
         new_states = omnidirectional_point_robot_dynamics(states, control, t)
         return (new_states, control)
 
-    def running_cost(self, state):
+    def running_cost(self, state, t=None):
         # Note: again normally mppi passes the state as a parameter in the running cost call, but using isaacgym the state is already saved and accesible in the simulator itself, so we ignore it and pass a handle to the simulator.
-        return self.objective.compute_cost(state)
+        return self.objective.compute_cost(state, t=t)
 
     def compute_action(self, q, qdot):
         q_tensor = torch.tensor([q], dtype=torch.float32, device=self.cfg.mppi.device)
         qdot_tensor = torch.tensor([qdot], dtype=torch.float32, device=self.cfg.mppi.device)
-        print(f"q_tensor: {q_tensor} {q_tensor.shape} {q_tensor.dtype}")
-        print(f"qdot_tensor: {qdot_tensor} {qdot_tensor.shape} {qdot_tensor.dtype}")
         self.current_state = torch.cat([q_tensor, qdot_tensor], dim=1)
 
         actions = self.mppi.command(self.current_state).cpu()
