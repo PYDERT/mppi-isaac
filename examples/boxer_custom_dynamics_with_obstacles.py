@@ -1,6 +1,6 @@
 import gym
 import numpy as np
-from urdfenvs.robots.generic_urdf import GenericUrdfReacher
+from urdfenvs.robots.generic_urdf.generic_diff_drive_robot import GenericDiffDriveRobot
 from urdfenvs.urdf_common.urdf_env import UrdfEnv
 from mppiisaac.planner.mppi_custom_dynamics import MPPICustomDynamicsPlanner
 import mppiisaac
@@ -20,11 +20,12 @@ import time
 import random
 
 # Set velocities of the obstacles. Not very nice but it works for the example
-N_obstacles = 10  # Number of obstacles with maximum of 10
+N_obstacles = 5  # Number of obstacles with maximum of 10
 vx = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
 vy = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
 dt = 0.05  # Check this by printing env.dt() somewhere
-cov_growth_factor = 1.0
+cov_growth_factor = 1.05
+
 
 class Objective(object):
     def __init__(self, cfg, obstacles):
@@ -84,12 +85,27 @@ def initalize_environment(cfg, obstacles) -> UrdfEnv:
     render
         Boolean toggle to set rendering on (True) or off (False).
     """
-    with open(f'{os.path.dirname(mppiisaac.__file__)}/../conf/actors/point_robot.yaml') as f:
-        heijn_cfg = yaml.load(f, Loader=SafeLoader)
-    urdf_file = f'{os.path.dirname(mppiisaac.__file__)}/../assets/urdf/' + heijn_cfg['urdf_file']
+
+    # Load in the boxer robot
+    urdf_file = (
+        os.path.dirname(os.path.abspath(__file__))
+        + "/../assets/urdf/boxer/boxer_bullet.urdf"
+    )
+
+    with open(f'{os.path.dirname(mppiisaac.__file__)}/../conf/actors/boxer.yaml') as f:
+        boxer_cfg = yaml.load(f, Loader=SafeLoader)
     robots = [
-        GenericUrdfReacher(urdf=urdf_file, mode="vel"),
+        GenericDiffDriveRobot(
+            urdf=urdf_file,
+            mode="vel",
+            actuated_wheels=["wheel_right_joint", "wheel_left_joint"],
+            castor_wheels=["rotacastor_right_joint", "rotacastor_left_joint"],
+            spawn_offset=np.array([0.0, 0.0, 0.05]),
+            wheel_radius = boxer_cfg['wheel_radius'],
+            wheel_distance = boxer_cfg['wheel_base'],
+        ),
     ]
+
     env: UrdfEnv = gym.make("urdf-env-v0", dt=0.05, robots=robots, render=cfg.render)
     # Set the initial position and velocity of the point mass.
     env.reset()
@@ -147,8 +163,8 @@ def set_planner(cfg, obstacles):
 def init_obstacles(cfg):
 
     # Initialise the random obstacle locations
-    init_area = 4.0
-    init_bias = 1.0
+    init_area = 8.0
+    init_bias = 3.0
 
     x = torch.rand(N_obstacles, device=cfg.mppi.device)*init_area-init_bias
     y = torch.rand(N_obstacles, device=cfg.mppi.device)*init_area-init_bias
@@ -163,12 +179,12 @@ def init_obstacles(cfg):
     cov = torch.tensor([[0.05, 0.0], [0.0, 0.05]], device=cfg.mppi.device)
     cov = cov.repeat(N_obstacles, 1, 1)
 
-    obstacles = DynamicObstacles(cfg, x, y, cov)
+    obstacles = DynamicObstacles(cfg, x, y, cov, integral_radius=0.5)
 
     return obstacles
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="config_point_robot_custom_dynamics.yaml")
+@hydra.main(version_base=None, config_path="../conf", config_name="config_boxer_custom_dynamics.yaml")
 def run_point_robot(cfg: ExampleConfig):
     """
     Set the gym environment, the planner and run point robot example.
@@ -197,11 +213,12 @@ def run_point_robot(cfg: ExampleConfig):
             q=ob_robot["joint_state"]["position"],
             qdot=ob_robot["joint_state"]["velocity"],
         )
-        print("Action step took: ", time.time() - t)
+        # print("Action step took: ", time.time() - t)
         (
             ob,
             *_,
         ) = env.step(action)
+        print(action)
     return {}
 
 

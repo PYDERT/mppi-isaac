@@ -14,7 +14,7 @@ from mppiisaac.utils.config_store import ExampleConfig
 
 class DynamicObstacles(object):
 
-    def __init__(self, cfg, x, y, cov) -> None:
+    def __init__(self, cfg, x, y, cov, N_monte_carlo=50000, sample_bound=5, integral_radius=0.15) -> None:
 
         # Set meta parameters
         self.print_time = False  # Set to True to print the time it takes to perform certain operations
@@ -36,9 +36,9 @@ class DynamicObstacles(object):
         self.state_cov = cov
 
         # Set values used for monte carlo integration
-        self.N_monte_carlo = 50000
-        self.integral_radius = 0.3
-        sample_bound = 5
+        self.N_monte_carlo = N_monte_carlo
+        self.integral_radius = integral_radius
+        sample_bound = sample_bound
         self.map_x0 = self.map_y0 = -sample_bound
         self.map_x1 = self.map_y1 = sample_bound
 
@@ -338,8 +338,8 @@ def test_integral_accuracy(cfg: ExampleConfig):
     # Note: Workaround to trigger the dataclasses __post_init__ method
     # cfg = OmegaConf.to_object(cfg)
 
-    x = torch.tensor([1.0], device=cfg.mppi.device)
-    y = torch.tensor([1.0], device=cfg.mppi.device)
+    x = torch.tensor([0.0], device=cfg.mppi.device)
+    y = torch.tensor([0.0], device=cfg.mppi.device)
     cov = torch.tensor([[0.3, 0.0], [0.0, 0.3]], device=cfg.mppi.device)
 
     x = 1

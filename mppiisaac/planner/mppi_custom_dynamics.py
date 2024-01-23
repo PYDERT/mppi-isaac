@@ -5,6 +5,7 @@ import os
 import yaml
 from yaml.loader import SafeLoader
 from mppiisaac.dynamics.point_robot import omnidirectional_point_robot_dynamics
+from mppiisaac.dynamics.boxer import differential_drive_dynamics
 
 import torch
 
@@ -33,6 +34,7 @@ class MPPICustomDynamicsPlanner(object):
         self.objective = objective
 
     def dynamics(self, states, control, t):
+        # new_states = differential_drive_dynamics(states, control, t)
         new_states = omnidirectional_point_robot_dynamics(states, control, t)
         return (new_states, control)
 
