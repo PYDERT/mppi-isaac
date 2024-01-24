@@ -15,6 +15,7 @@ from mpscenes.obstacles.dynamic_sphere_obstacle import DynamicSphereObstacle
 from mppiisaac.utils.config_store import ExampleConfig
 
 from mppiisaac.obstacles.obstacle_class import DynamicObstacles
+from mppiisaac.dynamics.boxer import differential_drive_dynamics
 
 import time
 import random
@@ -26,6 +27,13 @@ vy = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
 dt = 0.05  # Check this by printing env.dt() somewhere
 cov_growth_factor = 1.05
 
+class Dynamics(object):
+    def __init__(self, cfg):
+        self.dt = cfg.dt
+
+    def step_dynamics(self, states, control, t):
+        new_states = differential_drive_dynamics(states, control, self.dt)
+        return (new_states, control)
 
 class Objective(object):
     def __init__(self, cfg, obstacles):
@@ -155,7 +163,8 @@ def set_planner(cfg, obstacles):
     """
     # urdf = "../assets/point_robot.urdf"
     objective = Objective(cfg, obstacles)
-    planner = MPPICustomDynamicsPlanner(cfg, objective)
+    dynamics = Dynamics(cfg)
+    planner = MPPICustomDynamicsPlanner(cfg, objective, dynamics.step_dynamics)
 
     return planner
 
@@ -209,16 +218,13 @@ def run_point_robot(cfg: ExampleConfig):
         # Calculate action with the fabric planner, slice the states to drop Z-axis [3] information.
         t = time.time()
         ob_robot = ob["robot_0"]
-        action = planner.compute_action(
-            q=ob_robot["joint_state"]["position"],
-            qdot=ob_robot["joint_state"]["velocity"],
-        )
+        state = np.concatenate((ob_robot["joint_state"]["position"], ob_robot["joint_state"]["velocity"]))
+        action = planner.compute_action(state)
         # print("Action step took: ", time.time() - t)
         (
             ob,
             *_,
         ) = env.step(action)
-        print(action)
     return {}
 
 
