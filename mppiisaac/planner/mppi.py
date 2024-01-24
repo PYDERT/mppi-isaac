@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
 from mppiisaac.utils.mppi_utils import generate_gaussian_halton_samples, scale_ctrl, cost_to_go
 
+import time
 
 def _ensure_non_zero(cost, beta, factor):
     return torch.exp(-factor * (cost - beta))
@@ -98,65 +99,72 @@ class MPPIPlanner(ABC):
                             mppi_mode = 'halton-spline', sample_mode = 'random'
     """
 
-    def __init__(self, cfg: MPPIConfig, nx: int, dynamics: Callable, running_cost: Callable, prior: Optional[Callable] = None):
+    def __init__(self, cfg: MPPIConfig, nx: int, dynamics: Callable, running_cost: Callable, obstacles, prior: Optional[Callable] = None):
 
         # Parameters for mppi and sampling method
-        self.mppi_mode = cfg.mppi_mode
-        self.sample_method = cfg.sampling_method
+        self.mppi_mode = cfg.mppi.mppi_mode
+        self.sample_method = cfg.mppi.sampling_method
 
         # Utility vars
-        self.K = cfg.num_samples        # N_SAMPLES 
-        self.T = cfg.horizon            # TIMESTEPS
-        self.filter_u = cfg.filter_u    # Flag for Sav-Gol filter
-        self.lambda_ = cfg.lambda_
-        self.tensor_args={'device':cfg.device, 'dtype':torch.float32}
+        self.K = cfg.mppi.num_samples        # N_SAMPLES 
+        self.T = cfg.mppi.horizon            # TIMESTEPS
+        self.filter_u = cfg.mppi.filter_u    # Flag for Sav-Gol filter
+        self.lambda_ = cfg.mppi.lambda_
+        self.tensor_args={'device':cfg.mppi.device, 'dtype':torch.float32}
         self.delta = None
-        self.sample_null_action = cfg.sample_null_action
-        self.u_per_command = cfg.u_per_command
+        self.sample_null_action = cfg.mppi.sample_null_action
+        self.u_per_command = cfg.mppi.u_per_command
         self.terminal_state_cost = None
-        self.update_lambda = cfg.update_lambda
-        self.update_cov = cfg.update_cov
+        self.update_lambda = cfg.mppi.update_lambda
+        self.update_cov = cfg.mppi.update_cov
 
         # Bound actions
-        self.u_min = cfg.u_min
-        self.u_max = cfg.u_max
-        self.u_scale = cfg.u_scale        
+        self.u_min = cfg.mppi.u_min
+        self.u_max = cfg.mppi.u_max
+        self.u_scale = cfg.mppi.u_scale        
 
         # Noise and input initialization
-        self.noise_abs_cost = cfg.noise_abs_cost
+        self.noise_abs_cost = cfg.mppi.noise_abs_cost
         
-        if not cfg.noise_sigma:
-            cfg.noise_sigma = np.identity(int(nx/2)).tolist()
-        assert all([len(cfg.noise_sigma[0]) == len(row) for row in cfg.noise_sigma])
+        if not cfg.mppi.noise_sigma:
+            cfg.mppi.noise_sigma = np.identity(int(nx/2)).tolist()
+        assert all([len(cfg.mppi.noise_sigma[0]) == len(row) for row in cfg.mppi.noise_sigma])
 
-        if not cfg.noise_mu:
-            cfg.noise_mu = [0.0] * len(cfg.noise_sigma)
-        if not cfg.U_init:
-            cfg.U_init = [[0.0] * len(cfg.noise_mu)] * cfg.horizon
+        if not cfg.mppi.noise_mu:
+            cfg.mppi.noise_mu = [0.0] * len(cfg.mppi.noise_sigma)
+        if not cfg.mppi.U_init:
+            cfg.mppi.U_init = [[0.0] * len(cfg.mppi.noise_mu)] * cfg.mppi.horizon
 
         # Make sure if any of the input limits are specified, both are specified
-        if cfg.u_max and not cfg.u_min:
-            cfg.u_min = -cfg.u_max
-        if cfg.u_min and not cfg.u_max:
-            cfg.u_max = -cfg.u_min
+        if cfg.mppi.u_max and not cfg.mppi.u_min:
+            cfg.mppi.u_min = -cfg.mppi.u_max
+        if cfg.mppi.u_min and not cfg.mppi.u_max:
+            cfg.mppi.u_max = -cfg.mppi.u_min
         self.cfg = cfg
 
         self.dynamics = dynamics
         self.running_cost = running_cost
         self.prior = prior
 
+        self.nav_goal = torch.tensor(cfg.goal, device=cfg.mppi.device)
+        self.obstacles = obstacles
+        self.N_obstacles = len(self.obstacles.state_coordinates)
+        self.vx = torch.rand(self.N_obstacles, device="cuda:0") * 4 - 2
+        self.vy = torch.rand(self.N_obstacles, device="cuda:0") * 4 - 2
+        self.cov_growth_factor = 1.0
+
         # Convert lists in cfg to tensors and put them on device
-        self.noise_sigma = torch.tensor(cfg.noise_sigma, device=cfg.device)
-        self.noise_mu = torch.tensor(cfg.noise_mu, device=cfg.device)
+        self.noise_sigma = torch.tensor(cfg.mppi.noise_sigma, device=cfg.mppi.device)
+        self.noise_mu = torch.tensor(cfg.mppi.noise_mu, device=cfg.mppi.device)
         self.noise_sigma_inv = torch.inverse(self.noise_sigma)
         self.noise_dist = MultivariateNormal(
             self.noise_mu, covariance_matrix=self.noise_sigma
         )
-        self.u_init = torch.tensor(cfg.u_init, device=cfg.device)
-        self.U = torch.tensor(cfg.U_init, device=cfg.device)
+        self.u_init = torch.tensor(cfg.mppi.u_init, device=cfg.mppi.device)
+        self.U = torch.tensor(cfg.mppi.U_init, device=cfg.mppi.device)
         # self.U = self.noise_dist.sample((self.T,))
-        self.u_max = torch.tensor(cfg.u_max, device=cfg.device)
-        self.u_min = torch.tensor(cfg.u_min, device=cfg.device)
+        self.u_max = torch.tensor(cfg.mppi.u_max, device=cfg.mppi.device)
+        self.u_min = torch.tensor(cfg.mppi.u_min, device=cfg.mppi.device)
 
         # Dimensions of state nx and control nu
         self.nx = nx
@@ -192,7 +200,7 @@ class MPPIPlanner(ABC):
         self.step_size_mean = 1. # 0.98     # From storm
 
         # Discount
-        self.gamma = cfg.rollout_var_discount 
+        self.gamma = cfg.mppi.rollout_var_discount 
         self.gamma_seq = torch.cumprod(torch.tensor([1.0] + [self.gamma] * (self.T - 1)),dim=0).reshape(1, self.T)
         self.gamma_seq = self.gamma_seq.to(**self.tensor_args)
         self.beta = 1 # param storm
@@ -221,6 +229,8 @@ class MPPIPlanner(ABC):
         return self.dynamics(state, u, t=t)
 
     def _running_cost(self, state, t=None):
+
+        return self.compute_cost(state, t=t)
         # In case the MPPI custom dynamics is run, t is given as a parameter
         try:
             return self.running_cost(state, t=t)
@@ -523,3 +533,53 @@ class MPPIPlanner(ABC):
         if self.u_max is not None:
             action = torch.max(torch.min(action, self.u_max), self.u_min)
         return action
+    
+
+    def compute_cost(self, state: torch.Tensor, t: int):
+
+        # Calculate the distance to the goal
+        positions = state[:, 0:2]
+        goal_dist = torch.linalg.norm(positions - self.nav_goal, axis=1)
+
+        # If t is 0, we update the states of the obstacles
+        random_vel_range = 0.0
+
+        self.vx = self.vx + torch.rand(self.N_obstacles, device="cuda:0") * random_vel_range - random_vel_range / 2
+        self.vy = self.vy + torch.rand(self.N_obstacles, device="cuda:0") * random_vel_range - random_vel_range / 2
+
+        t = time.time()
+        if t == 0:
+            self.obstacles.state_coordinates[:, 0] += self.cfg.dt * self.obstacles.vx
+            self.obstacles.state_coordinates[:, 1] += self.cfg.dt * self.obstacles.vy
+            self.obstacles.state_cov = torch.tensor([[0.05, 0.0], [0.0, 0.05]], device=self.cfg.mppi.device)
+            self.obstacles.coordinates = self.obstacles.state_coordinates
+            self.obstacles.cov = self.obstacles.state_cov
+            self.obstacles.create_gaussians(self.obstacles.coordinates[:, 0],
+                    self.obstacles.coordinates[:, 1],
+                    self.obstacles.cov)
+
+
+            print(self.cfg.dt)        
+        # Otherwise we are calculating the expected location of the obstacles for a rollout with increased covariance
+        else:
+            self.obstacles.coordinates[:, 0] += self.cfg.dt * self.obstacles.vx
+            self.obstacles.coordinates[:, 1] += self.cfg.dt * self.obstacles.vy
+            self.obstacles.cov *= self.cov_growth_factor
+            self.obstacles.create_gaussians(self.obstacles.coordinates[:, 0],
+                    self.obstacles.coordinates[:, 1],
+                    self.obstacles.cov)
+
+        # print("Obstacle update took: ", time.time() - t)
+        # At 1000 rollouts: 0.0002s
+
+        t = time.time()
+        # print(f"Create gaussians took: {time.time() - t}")
+        # At 1000 rollouts: 0.001s
+ 
+        # Calculate the cost of the obstacles
+        t = time.time()
+        total_obstacle_cost = self.obstacles.integrate_one_shot_monte_carlo_circles(positions[:, 0], positions[:, 1])
+        # print(f"Calculate integral cost took: {time.time() - t}") 
+        # At 1000 rollouts: 0.006s
+
+        return goal_dist * 1.0 + total_obstacle_cost * 50.0

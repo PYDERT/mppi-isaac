@@ -18,14 +18,6 @@ from mppiisaac.obstacles.obstacle_class import DynamicObstacles
 from mppiisaac.dynamics.point_robot import omnidirectional_point_robot_dynamics
 
 import time
-import random
-
-# Set velocities of the obstacles. Not very nice but it works for the example
-N_obstacles = 10  # Number of obstacles with maximum of 10
-vx = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
-vy = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
-dt = 0.05  # Check this by printing env.dt() somewhere
-cov_growth_factor = 1.0
 
 class Objective(object):
     def __init__(self, cfg, obstacles):
@@ -35,42 +27,6 @@ class Objective(object):
         self.nav_goal = torch.tensor(cfg.goal, device=cfg.mppi.device)
         self.obstacles = obstacles
 
-    def compute_cost(self, state: torch.Tensor, t: int):
-
-        # Calculate the distance to the goal
-        positions = state[:, 0:2]
-        goal_dist = torch.linalg.norm(positions - self.nav_goal, axis=1)
-
-        # If t is 0, we update the states of the obstacles
-        random_vel_range = 0.0
-
-        global vx, vy
-        vx = vx + torch.rand(N_obstacles, device="cuda:0") * random_vel_range - random_vel_range / 2
-        vy = vy + torch.rand(N_obstacles, device="cuda:0") * random_vel_range - random_vel_range / 2
-
-        if t == 0:
-            self.obstacles.state_coordinates[:, 0] += dt * vx
-            self.obstacles.state_coordinates[:, 1] += dt * vy
-            self.obstacles.state_cov = torch.tensor([[0.05, 0.0], [0.0, 0.05]], device=self.cfg.mppi.device)
-            self.obstacles.coordinates = self.obstacles.state_coordinates
-            self.obstacles.cov = self.obstacles.state_cov
-            self.obstacles.create_gaussians(self.obstacles.coordinates[:, 0],
-                                self.obstacles.coordinates[:, 1],
-                                self.obstacles.cov)
-        
-        # Otherwise we are calculating the expected location of the obstacles for a rollout with increased covariance
-        else:
-            self.obstacles.coordinates[:, 0] += dt * vx
-            self.obstacles.coordinates[:, 1] += dt * vy
-            self.obstacles.cov *= cov_growth_factor
-            self.obstacles.create_gaussians(self.obstacles.coordinates[:, 0],
-                                self.obstacles.coordinates[:, 1],
-                                self.obstacles.cov)
- 
-        # Calculate the cost of the obstacles
-        total_obstacle_cost = self.obstacles.integrate_one_shot_monte_carlo_circles(positions[:, 0], positions[:, 1])
-
-        return goal_dist * 1.0 + total_obstacle_cost * 50.0
 
 class Dynamics(object):
     def __init__(self, cfg):
@@ -121,8 +77,8 @@ def initalize_environment(cfg, obstacles) -> UrdfEnv:
         # Specify the obstacle trajectories and radius
         dynamicObst1Dict = {
         "type": "sphere",
-        "geometry": {"trajectory": [f"{float(obstacles.state_coordinates[i][0].cpu())} + {float(vx.cpu()[i])} * t", 
-                                    f"{float(obstacles.state_coordinates[i][1].cpu())} + { float(vy.cpu()[i]) } * t", "0.1"], 
+        "geometry": {"trajectory": [f"{float(obstacles.state_coordinates[i][0].cpu())} + {float(obstacles.vx.cpu()[i])} * t", 
+                                    f"{float(obstacles.state_coordinates[i][1].cpu())} + { float(obstacles.vy.cpu()[i]) } * t", "0.1"], 
                     "radius": 0.1},
         "movable": False,
         }
@@ -149,12 +105,17 @@ def set_planner(cfg, obstacles):
     # urdf = "../assets/point_robot.urdf"
     objective = Objective(cfg, obstacles)
     dynamics = Dynamics(cfg)
-    planner = MPPICustomDynamicsPlanner(cfg, objective, dynamics.step_dynamics)
+    planner = MPPICustomDynamicsPlanner(cfg, objective, dynamics.step_dynamics, obstacles)
 
     return planner
 
 
 def init_obstacles(cfg):
+
+    # Set velocities of the obstacles. Not very nice but it works for the example
+    N_obstacles = 10  # Number of obstacles with maximum of 10
+    vx = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
+    vy = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
 
     # Initialise the random obstacle locations
     init_area = 4.0
@@ -173,7 +134,7 @@ def init_obstacles(cfg):
     cov = torch.tensor([[0.05, 0.0], [0.0, 0.05]], device=cfg.mppi.device)
     cov = cov.repeat(N_obstacles, 1, 1)
 
-    obstacles = DynamicObstacles(cfg, x, y, cov, integral_radius=0.15)
+    obstacles = DynamicObstacles(cfg, x, y, cov, vx, vy, integral_radius=0.2)
 
     return obstacles
 
@@ -205,11 +166,12 @@ def run_point_robot(cfg: ExampleConfig):
         ob_robot = ob["robot_0"]
         state = np.concatenate((ob_robot["joint_state"]["position"], ob_robot["joint_state"]["velocity"]))
         action = planner.compute_action(state)
-        print("Action step took: ", time.time() - t)
+        # print("Action step took: ", time.time() - t)
         (
             ob,
             *_,
         ) = env.step(action)
+        print(env.dt())
     return {}
 
 

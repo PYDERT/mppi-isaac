@@ -14,7 +14,7 @@ from mppiisaac.utils.config_store import ExampleConfig
 
 class DynamicObstacles(object):
 
-    def __init__(self, cfg, x, y, cov, N_monte_carlo=50000, sample_bound=5, integral_radius=0.15) -> None:
+    def __init__(self, cfg, x, y, cov, vx, vy, N_monte_carlo=50000, sample_bound=5, integral_radius=0.15) -> None:
 
         # Set meta parameters
         self.print_time = False  # Set to True to print the time it takes to perform certain operations
@@ -34,6 +34,8 @@ class DynamicObstacles(object):
         self.cfg = cfg
         self.state_coordinates = torch.stack((x, y), dim=1)
         self.state_cov = cov
+        self.vx = vx
+        self.vy = vy
 
         # Set values used for monte carlo integration
         self.N_monte_carlo = N_monte_carlo
