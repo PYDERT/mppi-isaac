@@ -162,6 +162,7 @@ class DynamicObstacles(object):
 
         # Sum the exponentiated log probabilities
         self.sum_pdf = torch.exp(log_probs).sum(dim=1)
+        # self.sum_pdf = torch.exp(log_probs).max(dim=1).values
 
         if self.print_time:
             print(f"Time to calculate pdf values batch: {time.time() - t}")

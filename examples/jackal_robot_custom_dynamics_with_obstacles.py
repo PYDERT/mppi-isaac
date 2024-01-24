@@ -1,6 +1,6 @@
 import gym
 import numpy as np
-from urdfenvs.robots.generic_urdf import GenericUrdfReacher
+from urdfenvs.robots.generic_urdf import GenericDiffDriveRobot
 from urdfenvs.urdf_common.urdf_env import UrdfEnv
 from mppiisaac.planner.mppi_custom_dynamics import MPPICustomDynamicsPlanner
 import mppiisaac
@@ -11,22 +11,23 @@ from omegaconf import OmegaConf
 import os
 import torch
 from mpscenes.goals.static_sub_goal import StaticSubGoal
-from mpscenes.obstacles.dynamic_sphere_obstacle import DynamicSphereObstacle
 from mppiisaac.utils.config_store import ExampleConfig
-
-from mppiisaac.obstacles.obstacle_class import DynamicObstacles
-from mppiisaac.dynamics.point_robot import omnidirectional_point_robot_dynamics
-
 import time
-import random
+
+from mpscenes.obstacles.dynamic_sphere_obstacle import DynamicSphereObstacle
+from mppiisaac.obstacles.obstacle_class import DynamicObstacles
+from mppiisaac.dynamics.jackal_robot import jackal_robot_dynamics
+
+# MPPI to navigate a simple robot to a goal position
 
 # Set velocities of the obstacles. Not very nice but it works for the example
 N_obstacles = 10  # Number of obstacles with maximum of 10
-vx = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
-vy = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
+vx = torch.rand(N_obstacles, device="cuda:0") * 2 - 1
+vy = torch.rand(N_obstacles, device="cuda:0") * 2 - 1
 dt = 0.05  # Check this by printing env.dt() somewhere
 cov_growth_factor = 1.0
 
+# TODO: This example doesn't work yet as intended. Obstacles aren't avoided properly.
 class Objective(object):
     def __init__(self, cfg, obstacles):
 
@@ -36,9 +37,8 @@ class Objective(object):
         self.obstacles = obstacles
 
     def compute_cost(self, state: torch.Tensor, t: int):
-
-        # Calculate the distance to the goal
         positions = state[:, 0:2]
+        rot_cost = torch.abs(state[:,5])
         goal_dist = torch.linalg.norm(positions - self.nav_goal, axis=1)
 
         # If t is 0, we update the states of the obstacles
@@ -70,14 +70,14 @@ class Objective(object):
         # Calculate the cost of the obstacles
         total_obstacle_cost = self.obstacles.integrate_one_shot_monte_carlo_circles(positions[:, 0], positions[:, 1])
 
-        return goal_dist * 1.0 + total_obstacle_cost * 50.0
+        return goal_dist * 1.0 + rot_cost * 0.05 + total_obstacle_cost * 50
 
 class Dynamics(object):
     def __init__(self, cfg):
         self.dt = cfg.dt
 
-    def step_dynamics(self, states, control, t):
-        new_states = omnidirectional_point_robot_dynamics(states, control, self.dt)
+    def simulate(self, states, control, t):
+        new_states, control = jackal_robot_dynamics(states, control, self.dt)
         return (new_states, control)
 
 
@@ -93,13 +93,25 @@ def initalize_environment(cfg, obstacles) -> UrdfEnv:
     render
         Boolean toggle to set rendering on (True) or off (False).
     """
-    with open(f'{os.path.dirname(mppiisaac.__file__)}/../conf/actors/point_robot.yaml') as f:
+    with open(f'{os.path.dirname(mppiisaac.__file__)}/../conf/actors/jackal.yaml') as f:
         heijn_cfg = yaml.load(f, Loader=SafeLoader)
     urdf_file = f'{os.path.dirname(mppiisaac.__file__)}/../assets/urdf/' + heijn_cfg['urdf_file']
     robots = [
-        GenericUrdfReacher(urdf=urdf_file, mode="vel"),
+        GenericDiffDriveRobot(
+            urdf=urdf_file,
+            mode="vel",
+            actuated_wheels=[
+                "rear_right_wheel",
+                "rear_left_wheel",
+                "front_right_wheel",
+                "front_left_wheel",
+            ],
+            castor_wheels=[],
+            wheel_radius = 0.098,
+            wheel_distance = 2 * 0.187795 + 0.08,
+        ),
     ]
-    env: UrdfEnv = gym.make("urdf-env-v0", dt=0.05, robots=robots, render=cfg.render)
+    env: UrdfEnv = gym.make("urdf-env-v0", dt=cfg.dt, robots=robots, render=cfg.render)
     # Set the initial position and velocity of the point mass.
     env.reset()
     goal_dict = {
@@ -135,7 +147,6 @@ def initalize_environment(cfg, obstacles) -> UrdfEnv:
 
     return env
 
-# mvn.mvnun
 
 def set_planner(cfg, obstacles):
     """
@@ -149,10 +160,9 @@ def set_planner(cfg, obstacles):
     # urdf = "../assets/point_robot.urdf"
     objective = Objective(cfg, obstacles)
     dynamics = Dynamics(cfg)
-    planner = MPPICustomDynamicsPlanner(cfg, objective, dynamics.step_dynamics)
+    planner = MPPICustomDynamicsPlanner(cfg, objective, dynamics.simulate)
 
     return planner
-
 
 def init_obstacles(cfg):
 
@@ -173,13 +183,12 @@ def init_obstacles(cfg):
     cov = torch.tensor([[0.05, 0.0], [0.0, 0.05]], device=cfg.mppi.device)
     cov = cov.repeat(N_obstacles, 1, 1)
 
-    obstacles = DynamicObstacles(cfg, x, y, cov, integral_radius=0.15)
+    obstacles = DynamicObstacles(cfg, x, y, cov, integral_radius=0.3)
 
     return obstacles
 
-
-@hydra.main(version_base=None, config_path="../conf", config_name="config_point_robot_custom_dynamics.yaml")
-def run_point_robot(cfg: ExampleConfig):
+@hydra.main(version_base=None, config_path="../conf", config_name="config_jackal_robot_custom_dynamics.yaml")
+def run_jackal_robot(cfg: ExampleConfig):
     """
     Set the gym environment, the planner and run point robot example.
     The initial zero action step is needed to initialize the sensor in the
@@ -205,7 +214,8 @@ def run_point_robot(cfg: ExampleConfig):
         ob_robot = ob["robot_0"]
         state = np.concatenate((ob_robot["joint_state"]["position"], ob_robot["joint_state"]["velocity"]))
         action = planner.compute_action(state)
-        print("Action step took: ", time.time() - t)
+        print(f"Time: {(time.time() - t)} s")
+        
         (
             ob,
             *_,
@@ -214,4 +224,4 @@ def run_point_robot(cfg: ExampleConfig):
 
 
 if __name__ == "__main__":
-    res = run_point_robot()
+    res = run_jackal_robot()

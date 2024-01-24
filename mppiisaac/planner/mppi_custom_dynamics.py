@@ -1,11 +1,5 @@
 from mppiisaac.planner.mppi import MPPIPlanner
-from typing import Callable, Optional
-import io
-import os
-import yaml
-from yaml.loader import SafeLoader
-from mppiisaac.dynamics.point_robot import omnidirectional_point_robot_dynamics
-from mppiisaac.dynamics.boxer import differential_drive_dynamics
+from typing import Callable
 
 import torch
 
@@ -18,9 +12,10 @@ class MPPICustomDynamicsPlanner(object):
         dynamics, running_cost, and terminal_cost
     """
 
-    def __init__(self, cfg, objective: Callable):
+    def __init__(self, cfg, objective: Callable, dynamics: Callable):
         self.cfg = cfg
         self.objective = objective
+        self.dynamics = dynamics
 
         self.mppi = MPPIPlanner(
             cfg.mppi,
@@ -33,19 +28,10 @@ class MPPICustomDynamicsPlanner(object):
     def update_objective(self, objective):
         self.objective = objective
 
-    def dynamics(self, states, control, t):
-        # new_states = differential_drive_dynamics(states, control, t)
-        new_states = omnidirectional_point_robot_dynamics(states, control, t)
-        return (new_states, control)
-
     def running_cost(self, state, t=None):
-        # Note: again normally mppi passes the state as a parameter in the running cost call, but using isaacgym the state is already saved and accesible in the simulator itself, so we ignore it and pass a handle to the simulator.
         return self.objective.compute_cost(state, t=t)
 
-    def compute_action(self, q, qdot):
-        q_tensor = torch.tensor([q], dtype=torch.float32, device=self.cfg.mppi.device)
-        qdot_tensor = torch.tensor([qdot], dtype=torch.float32, device=self.cfg.mppi.device)
-        self.current_state = torch.cat([q_tensor, qdot_tensor], dim=1)
-
+    def compute_action(self, state):
+        self.current_state = torch.tensor([state], dtype=torch.float32, device=self.cfg.mppi.device)
         actions = self.mppi.command(self.current_state).cpu()
         return actions
