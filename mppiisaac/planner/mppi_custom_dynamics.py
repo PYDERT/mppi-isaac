@@ -12,16 +12,19 @@ class MPPICustomDynamicsPlanner(object):
         dynamics, running_cost, and terminal_cost
     """
 
-    def __init__(self, cfg, objective: Callable, dynamics: Callable):
+    def __init__(self, cfg, objective: Callable, dynamics: Callable, predictor: Callable):
         self.cfg = cfg
         self.objective = objective
         self.dynamics = dynamics
+        self.predictor = predictor
 
         self.mppi = MPPIPlanner(
             cfg.mppi,
             cfg.nx,
             dynamics=self.dynamics,
-            running_cost=self.running_cost
+            running_cost=self.running_cost,
+            predictor=self.predictor,
+            objective=self.objective,
         )
         self.current_state = torch.zeros((self.cfg.mppi.num_samples, self.cfg.nx))
     

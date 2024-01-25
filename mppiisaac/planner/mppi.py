@@ -98,7 +98,7 @@ class MPPIPlanner(ABC):
                             mppi_mode = 'halton-spline', sample_mode = 'random'
     """
 
-    def __init__(self, cfg: MPPIConfig, nx: int, dynamics: Callable, running_cost: Callable, prior: Optional[Callable] = None):
+    def __init__(self, cfg: MPPIConfig, nx: int, dynamics: Callable, running_cost: Callable, predictor: Callable, objective: Callable, prior: Optional[Callable] = None):
 
         # Parameters for mppi and sampling method
         self.mppi_mode = cfg.mppi_mode
@@ -144,6 +144,8 @@ class MPPIPlanner(ABC):
         self.dynamics = dynamics
         self.running_cost = running_cost
         self.prior = prior
+        self.predictor = predictor
+        self.objective = objective
 
         # Convert lists in cfg to tensors and put them on device
         self.noise_sigma = torch.tensor(cfg.noise_sigma, device=cfg.device)
@@ -365,6 +367,11 @@ class MPPIPlanner(ABC):
         states = []
         actions = []
 
+        predicted_coordinates, predicted_cov = self.predictor.predict(self.objective.obstacles.state_coordinates, self.objective.obstacles.state_cov, self.objective.obstacles.vx, self.objective.obstacles.vy)
+        self.objective.obstacles.predicted_coordinates = predicted_coordinates
+        self.objective.obstacles.predicted_covs = predicted_cov
+        self.objective.obstacles.state_coordinates = self.objective.obstacles.predicted_coordinates[0, :, :]
+
         for t in range(T):
             u = self.u_scale * perturbed_actions[:, t]
 
@@ -378,12 +385,9 @@ class MPPIPlanner(ABC):
                 self.perturbed_action[self.K - 2][t] = u[self.K - 2]
                 
             state, u = self._dynamics(state, u, t)
-            c = self._running_cost(state, t)
 
             # Update action if there were changes in fusion mppi due for instance to suction constraints
             self.perturbed_action[:,t] = u
-            cost_samples += c
-            cost_horizon[:, t] = c 
 
             # Save total states/actions
             states.append(state)
@@ -393,6 +397,16 @@ class MPPIPlanner(ABC):
         # States is K x T x nx
         actions = torch.stack(actions, dim=-2)
         states = torch.stack(states, dim=-2)
+    
+        c = self._running_cost(states, t)
+
+        # c is a tensor of shape (T*K) and I want to shape it to (T, K)
+        c = c.reshape(T, K)
+
+        for t in range(T):
+            cost_samples += c[t, :]
+            cost_horizon[:, t] = c [t, :]
+
 
         # action perturbation cost
         if self.terminal_state_cost:

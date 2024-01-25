@@ -14,7 +14,7 @@ from mppiisaac.utils.config_store import ExampleConfig
 
 class DynamicObstacles(object):
 
-    def __init__(self, cfg, x, y, cov, N_monte_carlo=50000, sample_bound=5, integral_radius=0.15) -> None:
+    def __init__(self, cfg, x, y, cov, vx, vy, N_monte_carlo=50000, sample_bound=5, integral_radius=0.15) -> None:
 
         # Set meta parameters
         self.print_time = False  # Set to True to print the time it takes to perform certain operations
@@ -34,6 +34,13 @@ class DynamicObstacles(object):
         self.cfg = cfg
         self.state_coordinates = torch.stack((x, y), dim=1)
         self.state_cov = cov
+        self.vx = vx
+        self.vy = vy
+        self.N_obstacles = len(x)
+
+        # Initialise the predicted states of the obstacle
+        self.predicted_coordinates = None
+        self.predicted_covs = None
 
         # Set values used for monte carlo integration
         self.N_monte_carlo = N_monte_carlo
@@ -48,8 +55,28 @@ class DynamicObstacles(object):
         self.samples = torch.stack((samples_x, samples_y), dim=1)
 
         # For the initialisation, create all Gaussians
-        self.create_gaussians(x, y, cov, use_only_batch_gaussian=False)
+        # self.create_gaussians(x, y, cov, use_only_batch_gaussian=False)
+        # Save x, y and cov in the correct format
+        if isinstance(x, int) or isinstance(x, float):
+            x = torch.tensor([x], device=self.cfg.mppi.device)
+        
+        if isinstance(y, int) or isinstance(y, float):
+            y = torch.tensor([y], device=self.cfg.mppi.device)
 
+        if cov.ndim == 2:
+            cov = cov.unsqueeze(0)
+
+        # Set initial values for the gaussian
+        self.coordinates = torch.stack((x, y), dim=1)
+        self.cov = cov
+    
+    def update_velocties(self, vx, vy):
+        self.vx = vx
+        self.vy = vy
+
+    def update_predicted_states(self, coordinates, covs):
+        self.predicted_coordinates = coordinates
+        self.predicted_covs = covs
 
     # Function that can be called to create all Gaussians or only the most efficient, batch Gaussians
     def create_gaussians(self, x, y, cov, use_only_batch_gaussian=True):
@@ -157,10 +184,16 @@ class DynamicObstacles(object):
         t = time.time()
 
         # Expand points to match the batch size and compute log_prob
-        expanded_points = self.samples.unsqueeze(1).expand(-1, len(self.torch_gaussians), -1)
+        expanded_points = self.samples.unsqueeze(1).expand(-1, self.torch_gaussian_batch.batch_shape[0], -1)
         log_probs = self.torch_gaussian_batch.log_prob(expanded_points)
 
+        self.sum_pdf_batch = torch.zeros((self.N_monte_carlo, self.cfg.mppi.horizon), device=self.cfg.mppi.device)
         # Sum the exponentiated log probabilities
+
+        for i in range(self.cfg.mppi.horizon):
+            haha = log_probs[:, i*self.N_obstacles:(i+1)*self.N_obstacles]
+            self.sum_pdf_batch[:, i] = torch.exp(log_probs[:, i*self.N_obstacles:(i+1)*self.N_obstacles]).sum(dim=1)  # NOTE: HERE THE SLICING MUGHT BE INCORRECT
+        
         self.sum_pdf = torch.exp(log_probs).sum(dim=1)
         # self.sum_pdf = torch.exp(log_probs).max(dim=1).values
 
@@ -231,9 +264,27 @@ class DynamicObstacles(object):
         # Check which samples are within the specified bounds
         within_bounds = ((self.samples[:, 0, None] - x)**2 + (self.samples[:, 1, None] - y)**2 <= self.integral_radius**2)
 
-        # Mask the values of the pdf_values tensor with the within_bounds tensor and calculate the column sums
         if self.use_batch_gaussian:
+
+        ###################### THIS SHOULD BE FURTHER FIXED TO MAKE THE NEW COST CALCULATION WORK CORRECTLY ######################
+
+        # # Mask the values of the pdf_values tensor with the within_bounds tensor and calculate the column sums
+
+            
+        #     if self.sum_pdf_batch is not None:
+
+        #         self.maskes_values_batch = torch.zeros((self.N_monte_carlo, self.cfg.mppi.horizon), device=self.cfg.mppi.device)
+
+        #         for i in range(len(self.vx)//self.cfg.mppi.horizon):
+
+        #             self.maskes_values_batch[:, i] = self.sum_pdf_batch[i, :, None] * within_bounds
+        #             # log_probs[:, i*self.cfg.mppi.horizon:(i+1)*self.cfg.mppi.horizon]).sum(dim=0)
+        #     if self.sum_pdf is not None:
+
+        ############################################################################################################################
+
             masked_values = self.sum_pdf[:, None] * within_bounds  # Change self.pdf_values to self.sum_pdf to use batch version
+
         else:
             masked_values = self.pdf_values[:, None] * within_bounds
             

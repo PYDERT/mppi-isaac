@@ -21,7 +21,7 @@ import time
 import random
 
 # Set velocities of the obstacles. Not very nice but it works for the example
-N_obstacles = 5  # Number of obstacles with maximum of 10
+N_obstacles = 1  # Number of obstacles with maximum of 10
 vx = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
 vy = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
 dt = 0.05  # Check this by printing env.dt() somewhere
@@ -220,11 +220,13 @@ def run_point_robot(cfg: ExampleConfig):
         ob_robot = ob["robot_0"]
         state = np.concatenate((ob_robot["joint_state"]["position"], ob_robot["joint_state"]["velocity"]))
         action = planner.compute_action(state)
+        action[1] = -1*action[1]
         # print("Action step took: ", time.time() - t)
         (
             ob,
             *_,
         ) = env.step(action)
+        print(action)
     return {}
 
 
