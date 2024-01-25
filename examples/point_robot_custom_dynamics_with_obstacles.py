@@ -19,6 +19,8 @@ from mppiisaac.dynamics.point_robot import omnidirectional_point_robot_dynamics
 
 import time
 
+# NOTE: NOT FUNCTIONING YET
+
 class Objective(object):
     def __init__(self, cfg, obstacles):
 
