@@ -155,7 +155,7 @@ def initalize_environment(cfg, obstacles) -> UrdfEnv:
     env.add_goal(goal)
 
     # For every coordinate pair, init an obstacle
-    for i in range(len(obstacles.coordinates)):
+    for i in range(len(obstacles.state_coordinates)):
 
         # Specify the obstacle trajectories and radius
         dynamicObst1Dict = {

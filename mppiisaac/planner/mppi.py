@@ -369,8 +369,7 @@ class MPPIPlanner(ABC):
         actions = []
 
         predicted_coordinates, predicted_cov = self.predictor.predict(self.objective.obstacles.state_coordinates, self.objective.obstacles.state_cov, self.objective.obstacles.vx, self.objective.obstacles.vy)
-        self.objective.obstacles.predicted_coordinates = predicted_coordinates
-        self.objective.obstacles.predicted_covs = predicted_cov
+        self.objective.obstacles.update_predicted_states(predicted_coordinates, predicted_cov)
         self.objective.obstacles.state_coordinates = self.objective.obstacles.predicted_coordinates[0, :, :]
 
         for t in range(T):

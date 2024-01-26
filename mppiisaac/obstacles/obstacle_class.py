@@ -66,10 +66,6 @@ class DynamicObstacles(object):
 
         if cov.ndim == 2:
             cov = cov.unsqueeze(0)
-
-        # Set initial values for the gaussian
-        self.coordinates = torch.stack((x, y), dim=1)
-        self.cov = cov
     
     def update_velocties(self, vx, vy):
         self.vx = vx
@@ -187,14 +183,8 @@ class DynamicObstacles(object):
         # Expand points to match the batch size and compute log_prob
         expanded_points = self.samples.unsqueeze(1).expand(-1, self.torch_gaussian_batch.batch_shape[0], -1)
         log_probs = self.torch_gaussian_batch.log_prob(expanded_points)
-
-        self.sum_pdf_batch = torch.zeros((self.N_monte_carlo, self.cfg.mppi.horizon), device=self.cfg.mppi.device)
         
-        # Sum the exponentiated log probabilities
-        for i in range(self.N_obstacles):
-            self.sum_pdf_batch[:, i] = torch.exp(log_probs[:, i*self.t:(i+1)*self.t]).sum(dim=1)  # NOTE: HERE THE SLICING MUGHT BE INCORRECT
-        
-        # This was the version where the cost calculation was called every timestep
+        # Calculate the sum of the pdf values for each sample
         self.sum_pdf = torch.exp(log_probs).sum(dim=1)
         # self.sum_pdf = torch.exp(log_probs).max(dim=1).values  # Take the max rather than sum over all obstacles
 
