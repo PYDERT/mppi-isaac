@@ -2,6 +2,7 @@ import hydra
 import time
 import torch
 import numpy as np
+import matplotlib.pyplot as plt
 
 from omegaconf import OmegaConf
 from scipy.integrate import nquad, dblquad
@@ -14,7 +15,7 @@ from mppiisaac.utils.config_store import ExampleConfig
 
 class DynamicObstacles(object):
 
-    def __init__(self, cfg, x, y, cov, vx, vy, N_monte_carlo=50000, sample_bound=5, integral_radius=0.15) -> None:
+    def __init__(self, cfg, x, y, cov, vx, vy, N_monte_carlo=30000, sample_bound=5, integral_radius=0.15) -> None:
 
         # Set meta parameters
         self.print_time = False  # Set to True to print the time it takes to perform certain operations
@@ -44,7 +45,7 @@ class DynamicObstacles(object):
         self.predicted_covs = None
 
         # Set values used for monte carlo integration
-        self.N_monte_carlo = N_monte_carlo
+        self.N_monte_carlo = N_monte_carlo  # NOTE: Has large influence on the runtime of the cost calculation
         self.integral_radius = integral_radius
         sample_bound = sample_bound
         self.map_x0 = self.map_y0 = -sample_bound
@@ -279,7 +280,11 @@ def test_integral_speed(cfg: ExampleConfig):
     x = torch.tensor([1.0, 0.5], device=cfg.mppi.device)
     y = torch.tensor([1.0, 1.0], device=cfg.mppi.device)
     cov = torch.tensor([[[0.3, 0.0], [0.0, 0.3]], [[0.3, 0.0], [0.0, 0.3]]], device=cfg.mppi.device)
-    obstacle = DynamicObstacles(cfg, x, y, cov)
+    vx = torch.rand(len(x), device=cfg.mppi.device) * 4 - 2
+    vy = torch.rand(len(x), device=cfg.mppi.device) * 4 - 2
+
+    obstacle = DynamicObstacles(cfg, x, y, cov, vx, vy)
+    obstacle.create_gaussians(x, y, cov, use_only_batch_gaussian=False)
     N = 100
 
     calculate_scipy = True
@@ -364,11 +369,11 @@ def test_integral_accuracy(cfg: ExampleConfig):
     x = torch.tensor([0.0], device=cfg.mppi.device)
     y = torch.tensor([0.0], device=cfg.mppi.device)
     cov = torch.tensor([[0.3, 0.0], [0.0, 0.3]], device=cfg.mppi.device)
+    vx = torch.rand(len(x), device=cfg.mppi.device) * 4 - 2
+    vy = torch.rand(len(x), device=cfg.mppi.device) * 4 - 2
 
-    x = 1
-    y = 1
-
-    obstacle = DynamicObstacles(cfg, x, y, cov)
+    obstacle = DynamicObstacles(cfg, x, y, cov, vx, vy)
+    obstacle.create_gaussians(x, y, cov, use_only_batch_gaussian=False)
     N = 1000
 
     scipy_results = []
@@ -384,7 +389,7 @@ def test_integral_accuracy(cfg: ExampleConfig):
     for _ in range(N):
 
         # Sample lower and upper bounds for x and y. Note: the lower bounds must be less than the upper bounds
-        bound = 5
+        bound = obstacle.map_x1
         x0_sample = np.random.uniform(-bound, bound)
         x1_sample = np.random.uniform(x0_sample, bound)
         y0_sample = np.random.uniform(-bound, bound)
@@ -413,16 +418,10 @@ def test_integral_accuracy(cfg: ExampleConfig):
     relative_error = np.abs(monte_carlo_results - scipy_results)/scipy_results
     relative_error = relative_error[~np.isnan(relative_error)]
 
-    # Calculate mean of the error and its standard deviation
-    mean = error.mean()
-    std = error.std()
-
-    print(f"An error of {mean} +/- {std}")
+    print(f"An error of {error.mean()} +/- {error.std()}")
     print(f"And a relative error of {relative_error.mean()} +/- {relative_error.std()}")
     print("These errors can be reduced by increasing N_monte_carlo in the obstacles class.")
     print("Also check the bounds of sampling and if only a single Guassian is integrated or more. Integrating 1 Gaussian only gives the actual error")
-
-
 
 
 @hydra.main(version_base=None, config_path="../../conf", config_name="config_test_obstacle.yaml")
@@ -441,13 +440,93 @@ def test_monte_carlo_circle(cfg: ExampleConfig):
     monte_carlo_results = obstacle.integrate_one_shot_monte_carlo_circles(x, y)
 
 
+@hydra.main(version_base=None, config_path="../../conf", config_name="config_test_obstacle.yaml")
+def plot_relative_error_vs_N_monte_carlo(cfg: ExampleConfig):
+
+    x = torch.tensor([0.0], device=cfg.mppi.device)
+    y = torch.tensor([0.0], device=cfg.mppi.device)
+    cov = torch.tensor([[0.3, 0.0], [0.0, 0.3]], device=cfg.mppi.device)
+    vx = torch.rand(len(x), device=cfg.mppi.device) * 4 - 2
+    vy = torch.rand(len(x), device=cfg.mppi.device) * 4 - 2
+
+    errors = []
+    relative_errors = []
+
+    for N_monte_carlo in [10000, 20000, 30000, 40000, 50000, 75000, 100000]:
+
+        obstacle = DynamicObstacles(cfg, x, y, cov, vx, vy, N_monte_carlo=N_monte_carlo)
+        obstacle.create_gaussians(x, y, cov, use_only_batch_gaussian=False)
+        N = 1000
+
+        scipy_results = []
+
+        # Init empty lists for the bounds
+        x0 = []
+        x1 = []
+        y0 = []
+        y1 = []
+
+        print("The integral using the Monte Carlo approach compared to the scipy approach has")
+
+        for _ in range(N):
+
+            # Sample lower and upper bounds for x and y. Note: the lower bounds must be less than the upper bounds
+            bound = obstacle.map_x1
+            x0_sample = np.random.uniform(-bound, bound)
+            x1_sample = np.random.uniform(x0_sample, bound)
+            y0_sample = np.random.uniform(-bound, bound)
+            y1_sample = np.random.uniform(y0_sample, bound)
+
+            # Calculate the integral using scipy
+            result = obstacle.integrate_gaussian_scipy(x0_sample, x1_sample, y0_sample, y1_sample)
+
+            # Append result to the list
+            scipy_results.append(result)
+
+            # Append the bounds to the lists
+            x0.append(x0_sample)
+            x1.append(x1_sample)
+            y0.append(y0_sample)
+            y1.append(y1_sample)
+
+
+        monte_carlo_results = obstacle.integrate_one_shot_monte_carlo(x0, x1, y0, y1).cpu().numpy()
+        scipy_results = np.array(scipy_results)
+
+        # This is the error between the monte carlo and scipy results
+        error = np.abs(monte_carlo_results - scipy_results)
+        error = error[~np.isnan(error)]
+
+        relative_error = np.abs(monte_carlo_results - scipy_results)/scipy_results
+        relative_error = relative_error[~np.isnan(relative_error)]
+
+        print(f"An error of {error.mean()} +/- {error.std()}")
+        print(f"And a relative error of {relative_error.mean()} +/- {relative_error.std()}")
+        print("These errors can be reduced by increasing N_monte_carlo in the obstacles class.")
+        print("Also check the bounds of sampling and if only a single Guassian is integrated or more. Integrating 1 Gaussian only gives the actual error")
+
+        errors.append(error)
+        relative_errors.append(relative_error)
+    
+    # Plot the mean and std of the relative error vs N_monte_carlo
+    plt.figure()
+    # The errorbar should not stretch below 0 in the plot
+    plt.ylim(bottom=0)
+    plt.errorbar([10000, 20000, 30000, 40000, 50000, 75000, 100000], [error.mean() for error in relative_errors], yerr=[error.std() for error in relative_errors], fmt='o')
+    plt.xlabel("N_monte_carlo")
+    plt.ylabel("Relative error")
+    plt.grid()
+    plt.show()
+
 if __name__ == "__main__":
 
-    # Test the computational efficiency of multiple integral calculation methods
-    test_integral_speed()
+    # # Test the computational efficiency of multiple integral calculation methods
+    # test_integral_speed()
 
-    # Test the accuracy of the integral calculation methods
-    test_integral_accuracy()
+    # # Test the accuracy of the integral calculation methods
+    # test_integral_accuracy()
+
+    plot_relative_error_vs_N_monte_carlo()
 
     # Test the circles integral calculation method
     # test_monte_carlo_circle()

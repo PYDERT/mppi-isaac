@@ -198,8 +198,8 @@ def init_obstacles(cfg):
     # Set velocities of the obstacles. Not very nice but it works for the example
     global vx, vy, N_obstacles
     N_obstacles = 10  # Number of obstacles with maximum of 20
-    vx = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
-    vy = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
+    vx = torch.rand(N_obstacles, device=cfg.mppi.device) * 4 - 2
+    vy = torch.rand(N_obstacles, device=cfg.mppi.device) * 4 - 2
 
     # Initialise the random obstacle locations
     init_area = 6.0
