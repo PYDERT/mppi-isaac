@@ -22,6 +22,10 @@ from mppiisaac.dynamics.boxer import differential_drive_dynamics
 import time
 import random
 
+cov_growth_factor = None
+N_obstacles = None
+vx = None
+vy = None
 
 class Objective(object):
     def __init__(self, cfg, obstacles):
@@ -31,35 +35,44 @@ class Objective(object):
         self.nav_goal = torch.tensor(cfg.goal, device=cfg.mppi.device)
         self.obstacles = obstacles
 
-    def compute_cost(self, state: torch.Tensor, t: int):
+    def compute_cost_old(self, state: torch.Tensor, t: int):
+
+        # Calculate the distance to the goal
+        positions = state[:, 0:2]
+        goal_dist = torch.linalg.norm(positions - self.nav_goal, axis=1)
 
         # # If t is 0, we update the states of the obstacles
         # random_vel_range = 0.0
 
-        # N_obstacles = len(self.obstacles.vx)
-        # cov_growth_factor = 1.0
-        # dt = self.cfg.dt
-        # vx = self.obstacles.vx
-        # vy = self.obstacles.vy
+        # vx = vx + torch.rand(N_obstacles, device="cuda:0") * random_vel_range - random_vel_range / 2
+        # vy = vy + torch.rand(N_obstacles, device="cuda:0") * random_vel_range - random_vel_range / 2
 
-        # if t == 0:
-        #     self.obstacles.state_coordinates[:, 0] += dt * vx
-        #     self.obstacles.state_coordinates[:, 1] += dt * vy
-        #     self.obstacles.state_cov = torch.tensor([[0.05, 0.0], [0.0, 0.05]], device=self.cfg.mppi.device)
-        #     self.obstacles.coordinates = self.obstacles.state_coordinates
-        #     self.obstacles.cov = self.obstacles.state_cov
-        #     self.obstacles.create_gaussians(self.obstacles.coordinates[:, 0],
-        #                         self.obstacles.coordinates[:, 1],
-        #                         self.obstacles.cov)
+        if t == 0:
+            self.obstacles.state_coordinates[:, 0] += self.cfg.dt * vx
+            self.obstacles.state_coordinates[:, 1] += self.cfg.dt * vy
+            self.obstacles.state_cov = torch.tensor([[0.05, 0.0], [0.0, 0.05]], device=self.cfg.mppi.device)
+            self.obstacles.coordinates = self.obstacles.state_coordinates
+            self.obstacles.cov = self.obstacles.state_cov
+            self.obstacles.create_gaussians(self.obstacles.coordinates[:, 0],
+                                self.obstacles.coordinates[:, 1],
+                                self.obstacles.cov)
         
-        # # Otherwise we are calculating the expected location of the obstacles for a rollout with increased covariance
-        # else:
-        #     self.obstacles.coordinates[:, 0] += dt * vx
-        #     self.obstacles.coordinates[:, 1] += dt * vy
-        #     self.obstacles.cov *= cov_growth_factor
-        #     self.obstacles.create_gaussians(self.obstacles.coordinates[:, 0],
-        #                         self.obstacles.coordinates[:, 1],
-        #                         self.obstacles.cov)
+        # Otherwise we are calculating the expected location of the obstacles for a rollout with increased covariance
+        else:
+            self.obstacles.coordinates[:, 0] += self.cfg.dt * vx
+            self.obstacles.coordinates[:, 1] += self.cfg.dt * vy
+            self.obstacles.cov *= cov_growth_factor
+            self.obstacles.create_gaussians(self.obstacles.coordinates[:, 0],
+                                self.obstacles.coordinates[:, 1],
+                                self.obstacles.cov)
+ 
+        # Calculate the cost of the obstacles
+        total_obstacle_cost = self.obstacles.integrate_one_shot_monte_carlo_circles(positions[:, 0], positions[:, 1])
+
+        return goal_dist * 1.0 + total_obstacle_cost * 50.0
+
+
+    def compute_cost(self, state: torch.Tensor, t: int):
 
         # I have a tensor names state of shape (K, T, nx) and I want it to be of shape (T, K, nx)
         state = state.permute(1, 0, 2)
@@ -72,7 +85,6 @@ class Objective(object):
         goal_dist = torch.linalg.norm(positions - self.nav_goal, axis=1)
 
         coordinates = self.obstacles.predicted_coordinates
-        y = self.obstacles.predicted_coordinates
         covs = self.obstacles.predicted_covs
 
         coordinates = coordinates.reshape(-1, 2)
@@ -85,7 +97,7 @@ class Objective(object):
         # Calculate the cost of the obstacles
         total_obstacle_cost = self.obstacles.integrate_one_shot_monte_carlo_circles(positions[:, 0], positions[:, 1])
 
-        return goal_dist * 1.0 + total_obstacle_cost * 25.0
+        return goal_dist * 1.0 + total_obstacle_cost * 2.0
 
 class Dynamics(object):
     def __init__(self, cfg):
@@ -100,7 +112,8 @@ class Dynamics(object):
 class Predict(object):
     def __init__(self, cfg):
         self.cfg = cfg
-        self.cov_growth_factor = 1.0
+        global cov_growth_factor
+        cov_growth_factor = self.cov_growth_factor = 1.1
 
     def predict(self, coordinates, cov, vx, vy):
         predicted_coordinates, predicted_cov = predict_linear(self.cfg, coordinates, cov, vx, vy)
@@ -183,13 +196,14 @@ def set_planner(cfg, obstacles):
 def init_obstacles(cfg):
 
     # Set velocities of the obstacles. Not very nice but it works for the example
-    N_obstacles = 10  # Number of obstacles with maximum of 10
+    global vx, vy, N_obstacles
+    N_obstacles = 10  # Number of obstacles with maximum of 20
     vx = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
     vy = torch.rand(N_obstacles, device="cuda:0") * 4 - 2
 
     # Initialise the random obstacle locations
-    init_area = 4.0
-    init_bias = 1.0
+    init_area = 6.0
+    init_bias = 2.0
 
     x = torch.rand(N_obstacles, device=cfg.mppi.device)*init_area-init_bias
     y = torch.rand(N_obstacles, device=cfg.mppi.device)*init_area-init_bias

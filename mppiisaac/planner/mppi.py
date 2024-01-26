@@ -146,6 +146,7 @@ class MPPIPlanner(ABC):
         self.prior = prior
         self.predictor = predictor
         self.objective = objective
+        self.calculate_cost_once = True
 
         # Convert lists in cfg to tensors and put them on device
         self.noise_sigma = torch.tensor(cfg.noise_sigma, device=cfg.device)
@@ -389,6 +390,11 @@ class MPPIPlanner(ABC):
             # Update action if there were changes in fusion mppi due for instance to suction constraints
             self.perturbed_action[:,t] = u
 
+            if not self.calculate_cost_once:
+                c = self._running_cost(state, t)
+                cost_samples += c
+                cost_horizon[:, t] = c 
+
             # Save total states/actions
             states.append(state)
             actions.append(u)
@@ -398,14 +404,15 @@ class MPPIPlanner(ABC):
         actions = torch.stack(actions, dim=-2)
         states = torch.stack(states, dim=-2)
     
-        c = self._running_cost(states, t)
+        if self.calculate_cost_once:
+            
+            # Get cost for each timestep in every rollout
+            c = self._running_cost(states, t)
+            c = c.reshape(T, K)
 
-        # c is a tensor of shape (T*K) and I want to shape it to (T, K)
-        c = c.reshape(T, K)
-
-        for t in range(T):
-            cost_samples += c[t, :]
-            cost_horizon[:, t] = c [t, :]
+            for t in range(T):
+                cost_samples += c[t, :]
+                cost_horizon[:, t] = c [t, :]
 
 
         # action perturbation cost

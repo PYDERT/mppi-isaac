@@ -37,6 +37,7 @@ class DynamicObstacles(object):
         self.vx = vx
         self.vy = vy
         self.N_obstacles = len(x)
+        self.t = cfg.mppi.horizon
 
         # Initialise the predicted states of the obstacle
         self.predicted_coordinates = None
@@ -188,14 +189,14 @@ class DynamicObstacles(object):
         log_probs = self.torch_gaussian_batch.log_prob(expanded_points)
 
         self.sum_pdf_batch = torch.zeros((self.N_monte_carlo, self.cfg.mppi.horizon), device=self.cfg.mppi.device)
-        # Sum the exponentiated log probabilities
-
-        for i in range(self.cfg.mppi.horizon):
-            haha = log_probs[:, i*self.N_obstacles:(i+1)*self.N_obstacles]
-            self.sum_pdf_batch[:, i] = torch.exp(log_probs[:, i*self.N_obstacles:(i+1)*self.N_obstacles]).sum(dim=1)  # NOTE: HERE THE SLICING MUGHT BE INCORRECT
         
+        # Sum the exponentiated log probabilities
+        for i in range(self.N_obstacles):
+            self.sum_pdf_batch[:, i] = torch.exp(log_probs[:, i*self.t:(i+1)*self.t]).sum(dim=1)  # NOTE: HERE THE SLICING MUGHT BE INCORRECT
+        
+        # This was the version where the cost calculation was called every timestep
         self.sum_pdf = torch.exp(log_probs).sum(dim=1)
-        # self.sum_pdf = torch.exp(log_probs).max(dim=1).values
+        # self.sum_pdf = torch.exp(log_probs).max(dim=1).values  # Take the max rather than sum over all obstacles
 
         if self.print_time:
             print(f"Time to calculate pdf values batch: {time.time() - t}")
@@ -265,33 +266,13 @@ class DynamicObstacles(object):
         within_bounds = ((self.samples[:, 0, None] - x)**2 + (self.samples[:, 1, None] - y)**2 <= self.integral_radius**2)
 
         if self.use_batch_gaussian:
-
-        ###################### THIS SHOULD BE FURTHER FIXED TO MAKE THE NEW COST CALCULATION WORK CORRECTLY ######################
-
-        # # Mask the values of the pdf_values tensor with the within_bounds tensor and calculate the column sums
-
-            
-        #     if self.sum_pdf_batch is not None:
-
-        #         self.maskes_values_batch = torch.zeros((self.N_monte_carlo, self.cfg.mppi.horizon), device=self.cfg.mppi.device)
-
-        #         for i in range(len(self.vx)//self.cfg.mppi.horizon):
-
-        #             self.maskes_values_batch[:, i] = self.sum_pdf_batch[i, :, None] * within_bounds
-        #             # log_probs[:, i*self.cfg.mppi.horizon:(i+1)*self.cfg.mppi.horizon]).sum(dim=0)
-        #     if self.sum_pdf is not None:
-
-        ############################################################################################################################
-
             masked_values = self.sum_pdf[:, None] * within_bounds  # Change self.pdf_values to self.sum_pdf to use batch version
-
         else:
             masked_values = self.pdf_values[:, None] * within_bounds
             
         column_sums = torch.sum(masked_values, dim=0)
         true_counts = torch.sum(within_bounds, dim=0)
 
-        # Calculate the mean by dividing the sum by the count and avoid division by zero by using torch.where
         means_within_bounds = torch.where(true_counts > 0, column_sums / true_counts, torch.tensor(0.0))
         
         # The integral is approximated as the proportion of points within the bounds multiplied by the area of the rectangular region
