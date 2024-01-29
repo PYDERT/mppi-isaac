@@ -4,6 +4,8 @@ from hydra.core.config_store import ConfigStore
 from typing import List, Optional
 from enum import Enum
 
+import torch
+
 class SupportedActorTypes(Enum):
     Axis = 1
     Robot = 2
@@ -38,6 +40,22 @@ class ActorWrapper:
     noise_sigma_size: Optional[List[float]] = None
     noise_percentage_mass: float = 0.0
     noise_percentage_friction: float = 0.0
+
+
+@dataclass
+class ObstaclesConfig:
+    num_obstacles: int = None
+    cov_growth_factor: float = None
+    max_velocity: float = None
+    init_area: float = None
+    init_bias: float = None
+    initial_covarance: float = None
+    print_time: bool = False
+    use_gaussian_batch: bool = True
+    N_monte_carlo: int = 20000
+    sample_bound: int = 5
+    integral_radius: float = 0.15
+    split_calculation: bool = False
 
 
 @dataclass
@@ -83,6 +101,7 @@ class MPPIConfig(object):
     noise_abs_cost: bool = False
     filter_u: bool = False
     use_priors: bool = False
+    calculate_cost_once: bool = True
 
 @dataclass
 class IsaacGymConfig(object):
@@ -101,6 +120,7 @@ class ExampleConfig:
     n_steps: int
     mppi: MPPIConfig
     isaacgym: IsaacGymConfig
+    obstacles: ObstaclesConfig
     goal: List[float]
     nx: int
     actors: List[str]

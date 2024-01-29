@@ -98,7 +98,7 @@ class MPPIPlanner(ABC):
                             mppi_mode = 'halton-spline', sample_mode = 'random'
     """
 
-    def __init__(self, cfg: MPPIConfig, nx: int, dynamics: Callable, running_cost: Callable, predictor: Callable, objective: Callable, prior: Optional[Callable] = None):
+    def __init__(self, cfg: MPPIConfig, nx: int, dynamics: Callable, running_cost: Callable, objective: Callable = None, prior: Optional[Callable] = None):
 
         # Parameters for mppi and sampling method
         self.mppi_mode = cfg.mppi_mode
@@ -144,9 +144,17 @@ class MPPIPlanner(ABC):
         self.dynamics = dynamics
         self.running_cost = running_cost
         self.prior = prior
-        self.predictor = predictor
+
+        # Variables used for dynamic cost calculation
         self.objective = objective
-        self.calculate_cost_once = True
+        try:
+            self.predictor = objective.predictor
+            self.obstacles = objective.obstacles
+        except AttributeError:
+            self.predictor = None
+            self.obstacles = None
+
+        self.calculate_cost_once = cfg.calculate_cost_once
 
         # Convert lists in cfg to tensors and put them on device
         self.noise_sigma = torch.tensor(cfg.noise_sigma, device=cfg.device)
@@ -368,9 +376,10 @@ class MPPIPlanner(ABC):
         states = []
         actions = []
 
-        predicted_coordinates, predicted_cov = self.predictor.predict(self.objective.obstacles.state_coordinates, self.objective.obstacles.state_cov, self.objective.obstacles.vx, self.objective.obstacles.vy)
-        self.objective.obstacles.update_predicted_states(predicted_coordinates, predicted_cov)
-        self.objective.obstacles.state_coordinates = self.objective.obstacles.predicted_coordinates[0, :, :]
+        if self.predictor:
+            predicted_coordinates, predicted_cov = self.predictor.predict(self.obstacles.state_coordinates, self.obstacles.state_cov, self.obstacles.vx, self.obstacles.vy)
+            self.obstacles.update_predicted_states(predicted_coordinates, predicted_cov)
+            self.obstacles.state_coordinates = self.obstacles.predicted_coordinates[0, :, :]
 
         for t in range(T):
             u = self.u_scale * perturbed_actions[:, t]

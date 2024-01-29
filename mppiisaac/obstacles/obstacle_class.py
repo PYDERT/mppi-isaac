@@ -15,11 +15,11 @@ from mppiisaac.utils.config_store import ExampleConfig
 
 class DynamicObstacles(object):
 
-    def __init__(self, cfg, x, y, cov, vx, vy, N_monte_carlo=30000, sample_bound=5, integral_radius=0.15) -> None:
+    def __init__(self, cfg, x, y, cov, vx, vy) -> None:
 
         # Set meta parameters
-        self.print_time = False  # Set to True to print the time it takes to perform certain operations
-        self.use_batch_gaussian = True  # True is faster
+        self.print_time = cfg.obstacles.print_time  # Set to True to print the time it takes to perform certain operations
+        self.use_batch_gaussian = cfg.obstacles.use_gaussian_batch  # True is faster
 
         # Save x, y and cov in the correct format
         if isinstance(x, int) or isinstance(x, float):
@@ -37,17 +37,19 @@ class DynamicObstacles(object):
         self.state_cov = cov
         self.vx = vx
         self.vy = vy
-        self.N_obstacles = len(x)
-        self.t = cfg.mppi.horizon
-
         # Initialise the predicted states of the obstacle
         self.predicted_coordinates = None
         self.predicted_covs = None
 
+        # Save mppi parameters
+        self.N_obstacles = cfg.obstacles.num_obstacles
+        self.N_rollouts = cfg.mppi.num_samples
+        self.t = cfg.mppi.horizon
+
         # Set values used for monte carlo integration
-        self.N_monte_carlo = N_monte_carlo  # NOTE: Has large influence on the runtime of the cost calculation
-        self.integral_radius = integral_radius
-        sample_bound = sample_bound
+        self.N_monte_carlo = cfg.obstacles.N_monte_carlo  # NOTE: Has large influence on the runtime of the cost calculation
+        self.integral_radius = cfg.obstacles.integral_radius
+        sample_bound = cfg.obstacles.sample_bound
         self.map_x0 = self.map_y0 = -sample_bound
         self.map_x1 = self.map_y1 = sample_bound
 
@@ -56,18 +58,7 @@ class DynamicObstacles(object):
         samples_y = torch.rand((self.N_monte_carlo), device=self.cfg.mppi.device) * (self.map_y1 - self.map_y0) + self.map_y0
         self.samples = torch.stack((samples_x, samples_y), dim=1)
 
-        # For the initialisation, create all Gaussians
-        # self.create_gaussians(x, y, cov, use_only_batch_gaussian=False)
-        # Save x, y and cov in the correct format
-        if isinstance(x, int) or isinstance(x, float):
-            x = torch.tensor([x], device=self.cfg.mppi.device)
-        
-        if isinstance(y, int) or isinstance(y, float):
-            y = torch.tensor([y], device=self.cfg.mppi.device)
 
-        if cov.ndim == 2:
-            cov = cov.unsqueeze(0)
-    
     def update_velocties(self, vx, vy):
         self.vx = vx
         self.vy = vy
@@ -186,8 +177,25 @@ class DynamicObstacles(object):
         log_probs = self.torch_gaussian_batch.log_prob(expanded_points)
         
         # Calculate the sum of the pdf values for each sample
-        self.sum_pdf = torch.exp(log_probs).sum(dim=1)
-        # self.sum_pdf = torch.exp(log_probs).max(dim=1).values  # Take the max rather than sum over all obstacles
+        # Split the calculation into the timesteps
+        if self.cfg.mppi.calculate_cost_once and self.cfg.obstacles.split_calculation:  # NOTE: This should fix the problem of the sum being calculated over all timesteps
+
+            self.sum_pdf = torch.zeros((self.t, self.N_monte_carlo), device=self.cfg.mppi.device)
+            for i in range(self.t):
+                self.sum_pdf[i] = torch.exp(log_probs[:, i*self.N_obstacles:(i+1)*self.N_obstacles]).sum(dim=1)
+
+            # # CHAT REWRITE: The above code can be replaced by the following code
+            # # Reshape the log_probs tensor to have dimensions (N_monte_carlo, t, N_obstacles)
+            # reshaped_log_probs = log_probs.view(-1, self.t, self.N_obstacles)
+            # # Calculate the exponential of log_probs and sum over the last dimension
+            # exp_log_probs_sum = torch.exp(reshaped_log_probs).sum(dim=2)
+            # # The sum_pdf tensor is now ready without the use of a for loop
+            # self.sum_pdf = exp_log_probs_sum.transpose(0, 1)
+
+        # Calculate for all inputs at once
+        else:
+            self.sum_pdf = torch.exp(log_probs).sum(dim=1)
+            # self.sum_pdf = torch.exp(log_probs).max(dim=1).values  # Take the max rather than sum over all obstacles
 
         if self.print_time:
             print(f"Time to calculate pdf values batch: {time.time() - t}")
@@ -227,11 +235,10 @@ class DynamicObstacles(object):
         within_bounds = within_x_bounds & within_y_bounds
 
         # Mask the values of the pdf_values tensor with the within_bounds tensor and calculate the column sums
-
         if self.use_batch_gaussian:
-            masked_values = self.sum_pdf[:, None] * within_bounds  # Change self.pdf_values to self.sum_pdf to use batch version
+            masked_values = self.sum_pdf[:, None] * within_bounds
         else:
-            masked_values = self.pdf_values[:, None] * within_bounds  # Change self.pdf_values to self.sum_pdf to use batch version
+            masked_values = self.pdf_values[:, None] * within_bounds
 
         column_sums = torch.sum(masked_values, dim=0)
         true_counts = torch.sum(within_bounds, dim=0)
@@ -256,13 +263,33 @@ class DynamicObstacles(object):
         # Check which samples are within the specified bounds
         within_bounds = ((self.samples[:, 0, None] - x)**2 + (self.samples[:, 1, None] - y)**2 <= self.integral_radius**2)
 
-        if self.use_batch_gaussian:
-            masked_values = self.sum_pdf[:, None] * within_bounds  # Change self.pdf_values to self.sum_pdf to use batch version
-        else:
-            masked_values = self.pdf_values[:, None] * within_bounds
+        # Calculate per timestep
+        if self.cfg.mppi.calculate_cost_once and self.cfg.obstacles.split_calculation:  # NOTE: This should fix the problem of the sum being calculated over all timesteps
+            # Within bounds is of shape (N_monte_carlo, T*N_rollouts). Here reshape to (N_mounte_carlo, T, N_rollouts)
+            within_bounds = within_bounds.reshape(self.N_monte_carlo, self.t, self.N_rollouts)
+            within_bounds = within_bounds.permute(1, 0, 2)
             
-        column_sums = torch.sum(masked_values, dim=0)
-        true_counts = torch.sum(within_bounds, dim=0)
+            if self.use_batch_gaussian:
+                masked_values = self.sum_pdf[:, :, None] * within_bounds
+            else:
+                masked_values = self.pdf_values[:, :, None] * within_bounds
+
+            column_sums = torch.sum(masked_values, dim=1)
+            true_counts = torch.sum(within_bounds, dim=1)
+
+            # Reshape column_sums and true_counts to (T*N_rollouts)
+            column_sums = column_sums.reshape(self.t*self.N_rollouts)
+            true_counts = true_counts.reshape(self.t*self.N_rollouts)
+            
+        # Calculate for all inputs at once
+        else:
+            if self.use_batch_gaussian:
+                masked_values = self.sum_pdf[:, None] * within_bounds  # Change self.pdf_values to self.sum_pdf to use batch version
+            else:
+                masked_values = self.pdf_values[:, None] * within_bounds
+                
+            column_sums = torch.sum(masked_values, dim=0)
+            true_counts = torch.sum(within_bounds, dim=0)
 
         means_within_bounds = torch.where(true_counts > 0, column_sums / true_counts, torch.tensor(0.0))
         
@@ -520,13 +547,14 @@ def plot_relative_error_vs_N_monte_carlo(cfg: ExampleConfig):
 
 if __name__ == "__main__":
 
-    # # Test the computational efficiency of multiple integral calculation methods
-    # test_integral_speed()
+    # Test the computational efficiency of multiple integral calculation methods
+    test_integral_speed()
 
-    # # Test the accuracy of the integral calculation methods
-    # test_integral_accuracy()
+    # Test the accuracy of the integral calculation methods
+    test_integral_accuracy()
 
-    plot_relative_error_vs_N_monte_carlo()
+    # # Test the relative error vs N_monte_carlo
+    # plot_relative_error_vs_N_monte_carlo()
 
     # Test the circles integral calculation method
     # test_monte_carlo_circle()

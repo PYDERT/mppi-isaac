@@ -3,8 +3,8 @@ defaults:
 
 mppi_mode: "halton-spline"  # halton-spline, simple
 sampling_method: "halton"   # halton, random
-num_samples: 100
-horizon: 20                 # At least 12 for Halton Sampling
+num_samples: 400
+horizon: 50                 # At least 12 for Halton Sampling
 device: "cuda:0"
 lambda_: 0.1
 u_min: [-1.5]
@@ -16,4 +16,5 @@ sample_null_action: True
 noise_abs_cost: False
 filter_u: True
 use_priors: True
+calculate_cost_once: True  # If true, running_cost is calculated in one go for the entire rollout
 

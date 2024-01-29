@@ -1,0 +1,12 @@
+num_obstacles: 20
+cov_growth_factor: 1.05
+max_velocity: 4
+init_area: 6
+init_bias: 2
+initial_covarance: 0.03
+print_time: False
+use_gaussian_batch: True  # The faster method to calculate the Monte Carlo integral
+split_calculation: True  # If true, the Monte Carlo integral is calculated in batches per timestep. This setting changes the behaviour of the algorithm and increases computation time
+N_monte_carlo: 10000  # Number of samples used to calculate the Monte Carlo integral
+sample_bound: 5  # Defines the maximuma and minimum value between which samples are taken to calculate the Monte Carlo integral
+integral_radius: 0.15  # Defines the radius of the area which is integrated
